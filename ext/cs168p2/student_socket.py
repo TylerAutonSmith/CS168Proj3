@@ -567,7 +567,9 @@ class StudentUSocket(StudentUSocketBase):
     if (p.tcp.SYN or p.tcp.FIN or p.tcp.payload) and not retxed:
 
       ## Start of Stage 4.4 ##
-
+      if len(p.tcp.payload) > 0: 
+        p.tcp.seq = self.snd.nxt 
+        self.snd.nxt = self.snd.nxt |PLUS| len(p.tcp.payload )
       ## End of Stage 4.4 ##
       pass
 
@@ -601,11 +603,15 @@ class StudentUSocket(StudentUSocketBase):
     elif self.state in (ESTABLISHED, FIN_WAIT_1, FIN_WAIT_2,
                         CLOSE_WAIT, CLOSING, LAST_ACK, TIME_WAIT):
       if self.acceptable_seg(seg, payload):
-        ## Start of Stage 2.1 ##
-        
+        ## Start of Stage 2.1 ## 
+        # if self.rcv.nxt == seg.seq:
+        #     self.handle_accepted_seg(seg, payload)
+        # else:
+        #     self.set_pending_ack()
         ## End of Stage 2.1 ##
         pass
         ## Start of Stage 3.1 ##
+        self.rx_queue.push(p)
         # you may need to remove Stage 2's code.
 
         ## End of Stage 3.1 ##
@@ -616,6 +622,17 @@ class StudentUSocket(StudentUSocketBase):
     ## Start of Stage 3.2 ##
     # checking recv queue
     # Hint: data = packet.app[self.rcv.nxt |MINUS| packet.tcp.seq:]
+
+    while not self.rx_queue.empty():
+      s, pkt = self.rx_queue.peek()
+      if s == self.rcv.nxt:
+        s, p = self.rx_queue.pop()
+        data = p.app[self.rcv.nxt |MINUS| p.tcp.seq:]
+        self.handle_accepted_seg(pkt.tcp, data)
+      else:
+        self.set_pending_ack()
+        break
+
 
     ## End of Stage 3.2 ##
 
@@ -663,10 +680,6 @@ class StudentUSocket(StudentUSocketBase):
       
       self.set_pending_ack() 
       self.update_window(seg)
-
-
-
-
       ## End of Stage 1.3 ##
 
   def update_rto(self, acked_pkt):
@@ -697,7 +710,10 @@ class StudentUSocket(StudentUSocketBase):
       payload = payload[:rcv.wnd] # Chop to size!
 
     ## Start of Stage 2.3 ##
-
+    self.rcv.nxt = self.rcv.nxt |PLUS| len(payload)
+    self.rcv.wnd -= len(payload)
+    self.rx_data += payload
+    self.set_pending_ack()
     ## End of Stage 2.3 ##
 
   def update_window(self, seg):
@@ -723,7 +739,7 @@ class StudentUSocket(StudentUSocketBase):
     acceptable_seg()
     """
     ## Start of Stage 4.2 ##
-
+    self.snd.una = seg.ack
     ## End of Stage 4.2 ##
 
 
@@ -776,12 +792,19 @@ class StudentUSocket(StudentUSocketBase):
     # fifth, check ACK field
     if self.state in (ESTABLISHED, FIN_WAIT_1, FIN_WAIT_2, CLOSE_WAIT, CLOSING):
       ## Start of Stage 4.1 ##
+      if seg.ack |LT| self.snd.nxt and seg.ack |GE| self.snd.una:
+        self.handle_accepted_ack(seg)
+      elif seg.ack |LT| self.snd.una:
+        continue_after_ack = False
+      elif seg.ack |GE| self.snd.nxt:
+        return
 
+        
       ## End of Stage 4.1 ##
 
-      if snd.una |LE| seg.ack and seg.ack |LE| snd.nxt:
-        if snd.wl1 |LT| seg.seq or (snd.wl1 |EQ| seg.seq and snd.wl2 |LE| seg.ack):
-          self.update_window(seg)
+    if snd.una |LE| seg.ack and seg.ack |LE| snd.nxt:
+      if snd.wl1 |LT| seg.seq or (snd.wl1 |EQ| seg.seq and snd.wl2 |LE| seg.ack):
+        self.update_window(seg)
 
     ## Start of Stage 6.3 ##
     ## Start of Stage 7.3 ##
@@ -824,7 +847,8 @@ class StudentUSocket(StudentUSocketBase):
       return
 
     ## Start of Stage 2.2 ##
-
+    if self.state in (ESTABLISHED, FIN_WAIT_1, FIN_WAIT_2) and len(payload) > 0:
+      self.handle_accepted_payload(payload)
     ## End of Stage 2.2 ##
 
     # eight, check FIN bit
@@ -844,13 +868,26 @@ class StudentUSocket(StudentUSocketBase):
     bytes_sent = 0
 
     ## Start of Stage 4.3 ##
-    remaining = 0
-    while remaining > 0:
+    # remaining = self.snd.wnd - (self.snd.nxt |MINUS| self.snd.una)
+    remaining = (snd.wnd |PLUS| snd.una) |MINUS| self.snd.nxt 
+    while remaining > 0 :
+      payload_size = min(remaining, self.mss, len(self.tx_data))
+      if payload_size <= 0:
+        break
 
+      payload = self.tx_data[:payload_size]
+      self.tx_data = self.tx_data[payload_size:]
+
+      packet = self.new_packet(ack=True, data=payload)
+      self.tx(packet)
+
+      bytes_sent += payload_size
       num_pkts += 1
-      bytes_sent += len(payload)
+      remaining -= payload_size
+
 
     self.log.debug("sent {0} packets with {1} bytes total".format(num_pkts, bytes_sent))
+
     ## End of Stage 4.3 ##
 
   def start_timer_timewait(self):
