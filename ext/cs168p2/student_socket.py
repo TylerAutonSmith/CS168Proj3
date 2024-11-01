@@ -567,9 +567,9 @@ class StudentUSocket(StudentUSocketBase):
     if (p.tcp.SYN or p.tcp.FIN or p.tcp.payload) and not retxed:
 
       ## Start of Stage 4.4 ##
-      if len(p.tcp.payload) > 0: 
-        p.tcp.seq = self.snd.nxt 
-        self.snd.nxt = self.snd.nxt |PLUS| len(p.tcp.payload )
+      # if len(p.tcp.payload) > 0: 
+        # p.tcp.seq = self.snd.nxt 
+      self.snd.nxt = self.snd.nxt |PLUS| len(p.tcp.payload )
       ## End of Stage 4.4 ##
       pass
 
@@ -670,7 +670,7 @@ class StudentUSocket(StudentUSocketBase):
       ## Start of Stage 1.3 ##
       self.rcv.nxt = seg.seq |PLUS| 1
 
-      self.snd.una = self.snd.nxt
+      self.snd.una = seg.ack ####### changed from self.snd.nxt
 
       if self.snd.una |GT| self.snd.iss:
         pass
@@ -793,11 +793,14 @@ class StudentUSocket(StudentUSocketBase):
     if self.state in (ESTABLISHED, FIN_WAIT_1, FIN_WAIT_2, CLOSE_WAIT, CLOSING):
       ## Start of Stage 4.1 ##
       if seg.ack |LT| self.snd.nxt and seg.ack |GE| self.snd.una:
+        print( "REMAININGGGGGG3")
         self.handle_accepted_ack(seg)
       elif seg.ack |LT| self.snd.una:
+        print( "REMAININGGGGGG2")
         continue_after_ack = False
       elif seg.ack |GE| self.snd.nxt:
-        return
+        print( "REMAININGGGGGG 1")
+        # return
 
         
       ## End of Stage 4.1 ##
@@ -869,8 +872,9 @@ class StudentUSocket(StudentUSocketBase):
 
     ## Start of Stage 4.3 ##
     # remaining = self.snd.wnd - (self.snd.nxt |MINUS| self.snd.una)
-    remaining = (snd.wnd |PLUS| snd.una) |MINUS| self.snd.nxt 
-    while remaining > 0 :
+    remaining = snd.wnd
+    while remaining > 0 and len(self.tx_data) != 0:
+      print(remaining,  "REMAININGGGGGG")
       payload_size = min(remaining, self.mss, len(self.tx_data))
       if payload_size <= 0:
         break
